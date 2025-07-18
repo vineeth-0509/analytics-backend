@@ -1,0 +1,80 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  sessionId    String   @id
+  country      String?
+  device       String?
+  referrer     String?
+  startTime    DateTime
+  lastActivity DateTime
+  isActive     Boolean  @default(true)
+  events       Event[]
+}
+
+model Event {
+  id        String   @id @default(uuid())
+  type      String
+  page      String
+  timeStamp DateTime
+  metadata  Json?
+  session   Session  @relation(fields: [sessionId], references: [sessionId])
+  sessionId String
+}
+
+model DailyStats {
+  id              String   @id @default(uuid())
+  date            DateTime @unique
+  totalVisitors   Int      @default(0)
+  totalPageViews  Int      @default(0)
+  totalSession    Int      @default(0)
+  uniqueCountries Int      @default(0)
+}
+
+model PageStats {
+  id          String   @id @default(uuid())
+  page        String
+  date        DateTime
+  views       Int      @default(0)
+  uniqueViews Int      @default(0)
+
+  @@unique([page, date], name: "page_date")
+}
+
+model CountryStats {
+  id       String   @id @default(uuid())
+  country  String
+  date     DateTime
+  visitors Int      @default(0)
+  sessions Int      @default(0)
+
+  @@unique([country, date], name: "country_date")
+}
+
+model AlertLog {
+  id        String   @id @default(uuid())
+  level     String
+  message   String
+  details   Json?
+  createdAt DateTime @default(now())
+}
+
+model DashboardActionLog {
+  id        String   @id @default(uuid())
+  action    String
+  details   Json?
+  createdAt DateTime
+}
