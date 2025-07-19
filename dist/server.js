@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const http_1 = __importDefault(require("http"));
 const app_1 = __importDefault(require("./app"));
 const WebSocketServer_1 = require("./websocket/WebSocketServer");
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8000;
 const server = http_1.default.createServer(app_1.default);
 (0, WebSocketServer_1.initializeWebSocket)(server);
 server.listen(PORT, () => {

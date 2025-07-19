@@ -15,6 +15,13 @@ export type ServerToClientMessage =
       };
     }
   | {
+    type:"detailed_stats_response";
+    data:{
+      filter: {country: string; page?:string};
+      events: any[];
+    }
+  }
+  | {
       type: "user_connected";
       data: {
         totalDashboards: number;
@@ -38,8 +45,28 @@ export type ServerToClientMessage =
         message: string;
         details?: Record<string, unknown>;
       };
-    };
+    }
+    | DetailedStatsResponseMessage
+    | StatsResetMessage;
 
+    export type DetailedStatsResponseMessage = {
+        type:'detailed_stats_response';
+        data:{
+          filter: any;
+          results:{
+            id: string;
+            type: string;
+            page: string;
+            timestamp: string;
+            sessionId: string;
+          }[];
+        }
+    }
+
+
+    export type StatsResetMessage = {
+      type:'stats_reset';
+    }
 export type ClientToServerMessage = 
 | {
     type:'request_detailed_stats';

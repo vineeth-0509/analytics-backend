@@ -16,9 +16,18 @@ exports.processVisitorEvent = processVisitorEvent;
 exports.getAnalyticsSummary = getAnalyticsSummary;
 exports.getActiveSessions = getActiveSessions;
 exports.cleanupInactiveSessions = cleanupInactiveSessions;
+exports.getFilteredEvents = getFilteredEvents;
+exports.resetAllStats = resetAllStats;
 const client_1 = __importDefault(require("../config/client"));
 const logger_1 = __importDefault(require("../config/logger"));
+const WebSocketServer_1 = require("../websocket/WebSocketServer");
 const activeSessions = new Map();
+const ALERT_TIMEFRAME_MS = 60 * 1000;
+const SPIKE_THRESHOLD_WARNING = 25;
+const SPIKE_THRESHOLD_INFO = 10;
+const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
+let recentEventTimestamps = [];
+let isAlertOnCooldown = false;
 // export async function processVisitorEvent(eventData: VisitorEvent) {
 //   try {
 //     const { sessionId, country, page, timestamp, metadata } = eventData;
@@ -110,6 +119,7 @@ function processVisitorEvent(eventData) {
             ]);
             yield updatedDailyStats(today, visitorIncrement);
             updateInMemorySession(eventData);
+            checkForSpikeAndAlert();
             return { event, session };
         }
         catch (error) {
@@ -117,6 +127,52 @@ function processVisitorEvent(eventData) {
             throw error;
         }
     });
+}
+function checkForSpikeAndAlert() {
+    const now = Date.now();
+    recentEventTimestamps.push(now);
+    recentEventTimestamps = recentEventTimestamps.filter((timestamp) => now - timestamp < ALERT_TIMEFRAME_MS);
+    const visitorsLastMinute = recentEventTimestamps.length;
+    if (isAlertOnCooldown) {
+        return;
+    }
+    let alertToSend = null;
+    if (visitorsLastMinute >= SPIKE_THRESHOLD_WARNING) {
+        alertToSend = {
+            type: 'alert',
+            data: {
+                level: 'warning',
+                message: `High traffic warning! ${visitorsLastMinute} visitors in the last minute.`,
+                details: {
+                    visitorsLastMinute: visitorsLastMinute,
+                    threshold: SPIKE_THRESHOLD_WARNING,
+                },
+            },
+        };
+    }
+    else if (visitorsLastMinute >= SPIKE_THRESHOLD_INFO) {
+        alertToSend = {
+            type: 'alert',
+            data: {
+                level: 'info',
+                message: `Visitor spike detected: ${visitorsLastMinute} visitors in the last minute.`,
+                details: {
+                    visitorsLastMinute: visitorsLastMinute,
+                    threshold: SPIKE_THRESHOLD_INFO,
+                }
+            }
+        };
+    }
+    if (alertToSend) {
+        const wss = (0, WebSocketServer_1.getWebSocketServer)();
+        wss.broadcast(alertToSend);
+        isAlertOnCooldown = true;
+        console.log(`Alert sent, Entering cooldown period for ${ALERT_COOLDOWN_MS / 1000}s.`);
+        setTimeout(() => {
+            isAlertOnCooldown = false;
+            console.log("Alert cooldown period ended, ready to send new alerts.");
+        }, ALERT_COOLDOWN_MS);
+    }
 }
 // async function updateAggregateStats(
 //     date: Date,
@@ -298,4 +354,47 @@ function cleanupInactiveSessions() {
     if (cleanedCount > 0) {
         logger_1.default.info(`Cleaned up ${cleanedCount} inactive sessions.`);
     }
+}
+function getFilteredEvents(filter) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const whereClause = {};
+        if (filter.page) {
+            whereClause.page = {
+                contains: filter.page,
+                mode: 'insensitive'
+            };
+        }
+        if (filter.country) {
+            whereClause.sesssion = {
+                country: { equals: filter.country, mode: 'insensitive' }
+            };
+        }
+        return client_1.default.event.findMany({
+            where: whereClause,
+            orderBy: { timestamp: 'desc' },
+            take: 50,
+            select: {
+                id: true,
+                type: true,
+                page: true,
+                timestamp: true,
+                sessionId: true
+            },
+        });
+    });
+}
+function resetAllStats() {
+    return __awaiter(this, void 0, void 0, function* () {
+        yield client_1.default.$transaction([
+            client_1.default.event.deleteMany(),
+            client_1.default.session.deleteMany(),
+            client_1.default.dailyStats.deleteMany(),
+            client_1.default.pageStats.deleteMany(),
+            client_1.default.countryStats.deleteMany(),
+            client_1.default.alertLog.deleteMany(),
+            client_1.default.dashboardActionLog.deleteMany(),
+        ]);
+        activeSessions.clear();
+        logger_1.default.info("All analytics stats have been reset.");
+    });
 }

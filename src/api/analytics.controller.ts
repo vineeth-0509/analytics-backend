@@ -3,6 +3,18 @@ import {Request, Response} from "express";
 import * as analyticsService from "../services/analytics.service";
 import { getWebSocketServer } from "../websocket/WebSocketServer";
 import logger from "../config/logger";
+
+export async function resetStats(req:Request, res:Response){
+   try {
+    await analyticsService.resetAllStats();
+    const wss = getWebSocketServer();
+    wss.broadcast({type:'stats_reset'});
+    res.status(200).json({message:'All statistics have been reset.'})
+   } catch (error) {
+    console.error('Error resetting statistics:', error);
+    res.status(500).json({error:'Failed to reset statistics'});
+   }
+}
 export async function handleNewEvent(req:Request, res:Response){
     const eventData: VisitorEvent = req.body;
     if(!eventData.type || !eventData.sessionId || !eventData.page){

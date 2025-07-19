@@ -45,12 +45,27 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.resetStats = resetStats;
 exports.handleNewEvent = handleNewEvent;
 exports.getSummary = getSummary;
 exports.getSessions = getSessions;
 const analyticsService = __importStar(require("../services/analytics.service"));
 const WebSocketServer_1 = require("../websocket/WebSocketServer");
 const logger_1 = __importDefault(require("../config/logger"));
+function resetStats(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            yield analyticsService.resetAllStats();
+            const wss = (0, WebSocketServer_1.getWebSocketServer)();
+            wss.broadcast({ type: 'stats_reset' });
+            res.status(200).json({ message: 'All statistics have been reset.' });
+        }
+        catch (error) {
+            console.error('Error resetting statistics:', error);
+            res.status(500).json({ error: 'Failed to reset statistics' });
+        }
+    });
+}
 function handleNewEvent(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         const eventData = req.body;

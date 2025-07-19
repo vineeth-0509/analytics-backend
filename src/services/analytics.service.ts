@@ -1,9 +1,17 @@
 import prisma from "../config/client";
 import logger from "../config/logger";
 import { ActiveSession, VisitorEvent } from "../types/global";
+import { ServerToClientMessage } from "../websocket/types";
+import { getWebSocketServer } from "../websocket/WebSocketServer";
 
 const activeSessions = new Map<string, ActiveSession>();
+const ALERT_TIMEFRAME_MS = 60 * 1000;
+const SPIKE_THRESHOLD_WARNING = 25;
+const SPIKE_THRESHOLD_INFO = 10;
+const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 
+let recentEventTimestamps: number[] = [];
+let isAlertOnCooldown = false;
 // export async function processVisitorEvent(eventData: VisitorEvent) {
 //   try {
 //     const { sessionId, country, page, timestamp, metadata } = eventData;
@@ -102,6 +110,7 @@ export async function processVisitorEvent(eventData: VisitorEvent) {
    
     await updatedDailyStats(today, visitorIncrement);
     updateInMemorySession(eventData);
+    checkForSpikeAndAlert();
     return { event, session };
   } catch (error) {
     logger.error("Error processing visitor event:", error);
@@ -109,6 +118,57 @@ export async function processVisitorEvent(eventData: VisitorEvent) {
   }
 }
 
+function checkForSpikeAndAlert() {
+  const now = Date.now();
+  recentEventTimestamps.push(now);
+
+  recentEventTimestamps = recentEventTimestamps.filter(
+    (timestamp) => now - timestamp < ALERT_TIMEFRAME_MS
+  );
+  const visitorsLastMinute = recentEventTimestamps.length;
+
+  if(isAlertOnCooldown) {
+    return;
+  }
+
+  let alertToSend: ServerToClientMessage | null = null;
+  if(visitorsLastMinute >= SPIKE_THRESHOLD_WARNING){
+    alertToSend = {
+      type:'alert',
+      data:{
+        level:'warning',
+        message:`High traffic warning! ${visitorsLastMinute} visitors in the last minute.`,
+        details:{
+          visitorsLastMinute: visitorsLastMinute,
+          threshold:SPIKE_THRESHOLD_WARNING,
+        },
+      },
+   };
+  }else if (visitorsLastMinute >= SPIKE_THRESHOLD_INFO){
+    alertToSend = {
+      type:'alert',
+      data:{
+        level:'info',
+        message:`Visitor spike detected: ${visitorsLastMinute} visitors in the last minute.`,
+        details:{
+          visitorsLastMinute: visitorsLastMinute,
+          threshold:SPIKE_THRESHOLD_INFO,
+        }
+      }
+    };
+  }
+
+  if(alertToSend){
+    const wss = getWebSocketServer();
+    wss.broadcast(alertToSend);
+    isAlertOnCooldown = true;
+    console.log(`Alert sent, Entering cooldown period for ${ALERT_COOLDOWN_MS / 1000}s.`);
+    setTimeout(()=>{
+      isAlertOnCooldown = false;
+      console.log("Alert cooldown period ended, ready to send new alerts.");
+    }, ALERT_COOLDOWN_MS);
+  }
+}
 
 // async function updateAggregateStats(
 //     date: Date,
@@ -296,4 +356,47 @@ let cleanedCount = 0;
     if (cleanedCount > 0) {
         logger.info(`Cleaned up ${cleanedCount} inactive sessions.`);
     }
+}
+
+export async function getFilteredEvents(filter:{country: string; page?: string}){
+  const whereClause: any = {};
+  if(filter.page){
+    whereClause.page = {
+      contains: filter.page, 
+      mode:'insensitive'
+    }
+  }
+  if(filter.country){
+    whereClause.sesssion = {
+      country:{equals: filter.country, mode:'insensitive'}
+    };
+  }
+
+  return prisma.event.findMany({
+    where: whereClause,
+    orderBy:{timestamp:'desc'},
+    take: 50,
+    select:{
+      id: true,
+      type: true,
+      page: true,
+      timestamp: true,
+      sessionId: true
+    },
+  });
+}
+
+
+export async function resetAllStats(){
+  await prisma.$transaction([
+    prisma.event.deleteMany(),
+    prisma.session.deleteMany(),
+    prisma.dailyStats.deleteMany(),
+    prisma.pageStats.deleteMany(),
+    prisma.countryStats.deleteMany(),
+    prisma.alertLog.deleteMany(),
+    prisma.dashboardActionLog.deleteMany(),
+  ]);
+  activeSessions.clear();
+  logger.info("All analytics stats have been reset.");
 }
