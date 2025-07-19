@@ -16,7 +16,7 @@ datasource db {
 
 model Session {
   sessionId    String   @id
-  country      String?
+  country      String
   device       String?
   referrer     String?
   startTime    DateTime
@@ -29,7 +29,7 @@ model Event {
   id        String   @id @default(uuid())
   type      String
   page      String
-  timeStamp DateTime
+  timestamp DateTime
   metadata  Json?
   session   Session  @relation(fields: [sessionId], references: [sessionId])
   sessionId String
