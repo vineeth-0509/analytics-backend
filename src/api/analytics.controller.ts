@@ -25,7 +25,8 @@ export async function handleNewEvent(req:Request, res:Response){
         await analyticsService.processVisitorEvent(eventData);
         const wss = getWebSocketServer();
         const summary = await analyticsService.getAnalyticsSummary();
-        const sessionActivity = analyticsService.getActiveSessions().find(s=> s.sessionId = eventData.sessionId);
+        //const sessionActivity = analyticsService.getActiveSessions().find(s=> s.sessionId = eventData.sessionId);
+       const sessionActivity = await analyticsService.getSessionById(eventData.sessionId);
         wss.broadcast({
             type:"visitor_update",
             data:{event: eventData, stats: summary}

@@ -76,7 +76,8 @@ function handleNewEvent(req, res) {
             yield analyticsService.processVisitorEvent(eventData);
             const wss = (0, WebSocketServer_1.getWebSocketServer)();
             const summary = yield analyticsService.getAnalyticsSummary();
-            const sessionActivity = analyticsService.getActiveSessions().find(s => s.sessionId = eventData.sessionId);
+            //const sessionActivity = analyticsService.getActiveSessions().find(s=> s.sessionId = eventData.sessionId);
+            const sessionActivity = yield analyticsService.getSessionById(eventData.sessionId);
             wss.broadcast({
                 type: "visitor_update",
                 data: { event: eventData, stats: summary }

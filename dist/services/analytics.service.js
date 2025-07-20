@@ -15,8 +15,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.processVisitorEvent = processVisitorEvent;
 exports.getAnalyticsSummary = getAnalyticsSummary;
 exports.getActiveSessions = getActiveSessions;
+exports.getSessionById = getSessionById;
 exports.cleanupInactiveSessions = cleanupInactiveSessions;
 exports.getFilteredEvents = getFilteredEvents;
+exports.getFilteredEventsForFrontend = getFilteredEventsForFrontend;
 exports.resetAllStats = resetAllStats;
 const client_1 = __importDefault(require("../config/client"));
 const logger_1 = __importDefault(require("../config/logger"));
@@ -28,99 +30,34 @@ const SPIKE_THRESHOLD_INFO = 10;
 const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 let recentEventTimestamps = [];
 let isAlertOnCooldown = false;
-// export async function processVisitorEvent(eventData: VisitorEvent) {
-//   try {
-//     const { sessionId, country, page, timestamp, metadata } = eventData;
-//     const eventTimeStamp = new Date(timestamp);
-//     const today = new Date(timestamp);
-//     today.setUTCHours(0, 0, 0, 0);
-//     const isNewSession = !activeSessions.has(sessionId);
-//     const session = prisma.session.upsert({
-//       where: { sessionId },
-//       create: {
-//         sessionId,
-//         country,
-//         device: metadata?.device,
-//         referrer: metadata?.referrer,
-//         startTime: eventTimeStamp,
-//         lastActivity: eventTimeStamp,
-//         isActive: true,
-//       },
-//       update: {
-//         lastActivity: eventTimeStamp,
-//         isActive: true,
-//       },
-//     });
-//     const event = await prisma.event.create({
-//       data: {
-//        sessionId: eventData.sessionId,
-//        type: eventData.type,
-//        page: eventData.page,
-//        timestamp: eventTimeStamp,
-//        metadata : eventData.metadata || {},
-//       },
-//     });
-//     await updateAggregateStats(today, country, page, isNewSession);
-//     updateInMemorySession(eventData);
-//     return { event, session };
-//   } catch (error) {
-//     logger.error("Error processing visitor event:", error);
-//     throw error;
-//   }
-// }
 function processVisitorEvent(eventData) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
-            const { sessionId, country, page, timestamp, metadata, type } = eventData;
-            const eventTimeStamp = new Date(timestamp);
-            if (isNaN(eventTimeStamp.getTime())) {
-                throw new Error(`Invalid timestamp provided: ${timestamp}`);
-            }
+            const { id, sessionId, country, page, timestamp, metadata } = eventData;
+            const eventTimestamp = new Date(timestamp);
             const today = new Date(timestamp);
             today.setUTCHours(0, 0, 0, 0);
-            const isNewSession = !activeSessions.has(sessionId);
-            const visitorIncrement = isNewSession ? 1 : 0;
-            const [session, event] = yield client_1.default.$transaction([
-                client_1.default.session.upsert({
-                    where: { sessionId },
-                    create: {
-                        sessionId,
-                        country,
-                        device: metadata === null || metadata === void 0 ? void 0 : metadata.device,
-                        referrer: metadata === null || metadata === void 0 ? void 0 : metadata.referrer,
-                        startTime: eventTimeStamp,
-                        lastActivity: eventTimeStamp,
-                        isActive: true,
-                    },
-                    update: {
-                        lastActivity: eventTimeStamp,
-                        isActive: true,
-                    },
-                }),
-                client_1.default.event.create({
-                    data: {
-                        sessionId: sessionId,
-                        type: type,
-                        page: page,
-                        timestamp: eventTimeStamp,
-                        metadata: metadata || {},
-                    },
-                }),
-                client_1.default.pageStats.upsert({
-                    where: { page_date: { page, date: today } },
-                    create: { page, date: today, views: 1, uniqueViews: 1 },
-                    update: { views: { increment: 1 }, uniqueViews: { increment: visitorIncrement } },
-                }),
-                client_1.default.countryStats.upsert({
-                    where: { country_date: { country, date: today } },
-                    create: { country, date: today, visitors: 1, sessions: 1 },
-                    update: { visitors: { increment: visitorIncrement }, sessions: { increment: visitorIncrement } },
-                }),
-            ]);
-            yield updatedDailyStats(today, visitorIncrement);
+            const existingSession = yield client_1.default.session.findUnique({
+                where: { sessionId },
+            });
+            const newLastActivity = (existingSession && existingSession.lastActivity > eventTimestamp) ?
+                existingSession.lastActivity
+                : eventTimestamp;
+            yield client_1.default.session.upsert({
+                where: { sessionId },
+                create: { sessionId, country, device: metadata === null || metadata === void 0 ? void 0 : metadata.device, referrer: metadata === null || metadata === void 0 ? void 0 : metadata.referrer, startTime: eventTimestamp, lastActivity: eventTimestamp, isActive: true },
+                update: {
+                    lastActivity: newLastActivity,
+                    isActive: true,
+                    country
+                },
+            });
+            yield client_1.default.event.create({
+                data: { id, sessionId, type: eventData.type, page, timestamp: eventTimestamp, metadata: metadata || {} },
+            });
+            yield updatedDailyStats(today, page);
             updateInMemorySession(eventData);
             checkForSpikeAndAlert();
-            return { event, session };
         }
         catch (error) {
             logger_1.default.error("Error processing visitor event:", error);
@@ -139,9 +76,9 @@ function checkForSpikeAndAlert() {
     let alertToSend = null;
     if (visitorsLastMinute >= SPIKE_THRESHOLD_WARNING) {
         alertToSend = {
-            type: 'alert',
+            type: "alert",
             data: {
-                level: 'warning',
+                level: "warning",
                 message: `High traffic warning! ${visitorsLastMinute} visitors in the last minute.`,
                 details: {
                     visitorsLastMinute: visitorsLastMinute,
@@ -152,15 +89,15 @@ function checkForSpikeAndAlert() {
     }
     else if (visitorsLastMinute >= SPIKE_THRESHOLD_INFO) {
         alertToSend = {
-            type: 'alert',
+            type: "alert",
             data: {
-                level: 'info',
+                level: "info",
                 message: `Visitor spike detected: ${visitorsLastMinute} visitors in the last minute.`,
                 details: {
                     visitorsLastMinute: visitorsLastMinute,
                     threshold: SPIKE_THRESHOLD_INFO,
-                }
-            }
+                },
+            },
         };
     }
     if (alertToSend) {
@@ -174,144 +111,59 @@ function checkForSpikeAndAlert() {
         }, ALERT_COOLDOWN_MS);
     }
 }
-// async function updateAggregateStats(
-//     date: Date,
-//     country: string,
-//     page: string,
-//     isNewSession: boolean
-// ): Promise<void> {
-//     const visitorIncrement = isNewSession ? 1: 0;
-//     await prisma.$transaction([
-//         prisma.dailyStats.upsert({
-//             where: { date },
-//             create: { date, totalPageViews: 1, totalVisitors: 1, totalSessions: 1 },
-//             update: {
-//                 totalPageViews: { increment: 1 },
-//                 totalVisitors:{increment: visitorIncrement},
-//                 totalSessions:{increment: visitorIncrement},
-//             },
-//         }),
-//         prisma.pageStats.upsert({
-//             where: {
-//                 page_date: { page, date }
-//             },
-//             create: {
-//                 page, date, views: 1, uniqueViews: 1
-//             },
-//             update: {
-//                 views: { increment: 1 },
-//                 uniqueViews:{increment: visitorIncrement}
-//             },
-//         }),
-//         prisma.countryStats.upsert({
-//             where: {
-//                 country_date: { country, date }
-//             },
-//             create: { country, date, visitors: 1, sessions: 1 },
-//             update: {
-//                 visitors:{increment: visitorIncrement},
-//                 sessions: { increment: visitorIncrement } },
-//         }),
-//     ]);
-//     if (isNewSession) {
-//         const uniqueCountryCount = await prisma.countryStats.count({
-//             where: { date },
-//         });
-//         await prisma.dailyStats.update({
-//             where: { date },
-//             data: { uniqueCountries: uniqueCountryCount },
-//         });
-//     }
-// }
-function updatedDailyStats(date, visitorIncrement) {
+function updatedDailyStats(date, page) {
     return __awaiter(this, void 0, void 0, function* () {
-        const uniqueCountryCount = yield client_1.default.countryStats.count({ where: { date } });
         yield client_1.default.dailyStats.upsert({
             where: { date },
-            create: { date, totalPageViews: 1, totalVisitors: 1, totalSessions: 1, uniqueCountries: uniqueCountryCount },
-            update: {
-                totalPageViews: { increment: 1 },
-                totalVisitors: { increment: visitorIncrement },
-                totalSessions: { increment: visitorIncrement },
-                uniqueCountries: uniqueCountryCount,
-            },
+            create: { date, totalPageViews: 1 },
+            update: { totalPageViews: { increment: 1 } },
+        });
+        yield client_1.default.pageStats.upsert({
+            where: { page_date: { page, date } },
+            create: { page, date, views: 1 },
+            update: { views: { increment: 1 } },
         });
     });
 }
-function updateInMemorySession(eventData) {
-    const { sessionId, page, timestamp, country } = eventData;
+function updateInMemorySession({ id, sessionId, page, timestamp, country }) {
     const now = new Date(timestamp);
-    const existingSession = activeSessions.get(sessionId);
-    // if (!session) {
-    //     session = {
-    //         sessionId,
-    //         startTime: now,
-    //         journey: [],
-    //         currentPage: page,
-    //         duration: 0,
-    //         lastActivity: now,
-    //     };
-    // }
-    // session.currentPage = page;
-    // session.journey.push(page);
-    // session.lastActivity = now;
-    // session.duration = Math.round((now.getTime() - session.startTime.getTime()) / 1000);
-    // if (!existingSession) {
-    //     session = {
-    //         sessionId, country, currentPage: page, journey: [page],
-    //         startTime: now, lastActivity: now, duration: 0,
-    //     };
-    //     activeSessions.set(sessionId, session);
-    // } else {
-    //     session.currentPage = page;
-    //     if(session.journey[session.journey.length-1] !== page) session.journey.push(page);
-    //     session.lastActivity = now;
-    //     session.duration = Math.round((now.getTime() - session.startTime.getTime()) / 1000);
-    // }
-    if (existingSession) {
-        existingSession.lastActivity = now;
-        existingSession.currentPage = page;
-        if (existingSession.journey[existingSession.journey.length - 1] !== page) {
-            existingSession.journey.push(page);
-        }
-        existingSession.duration = Math.round((existingSession.lastActivity.getTime() -
-            existingSession.startTime.getTime()) / 1000);
-    }
-    else {
-        const newSession = {
-            sessionId: sessionId,
-            country: country,
-            currentPage: page,
-            journey: [page],
-            lastActivity: now,
-            startTime: now,
-            duration: 0
-        };
+    let session = activeSessions.get(sessionId);
+    if (!session) {
+        console.log(`Creating new in-memory session for ${sessionId} from country: ${country}`);
+        const newSession = { id, sessionId, startTime: now, journey: [page], currentPage: page, duration: 0, lastActivity: now, country };
         activeSessions.set(sessionId, newSession);
+        return;
     }
+    // we only update properties on the existing session object
+    session.id = id;
+    session.country = country;
+    session.currentPage = page;
+    session.lastActivity = now;
+    session.duration = Math.round((now.getTime() - session.startTime.getTime()) / 1000);
+    if (session.journey[session.journey.length - 1] !== page) {
+        session.journey.push(page);
+    }
+    activeSessions.set(sessionId, session);
 }
 function getAnalyticsSummary() {
     return __awaiter(this, void 0, void 0, function* () {
         const today = new Date();
         today.setUTCHours(0, 0, 0, 0);
-        const stats = yield client_1.default.dailyStats.findUnique({
+        const totalVisitorsTodayCount = yield client_1.default.session.count({
             where: {
-                date: today
-            },
+                lastActivity: {
+                    gte: today
+                }
+            }
         });
         const pageViews = yield client_1.default.pageStats.findMany({
-            where: {
-                date: today
-            },
+            where: { date: today },
             orderBy: { views: 'desc' }
         });
-        const pagesVisited = pageViews.reduce((acc, curr) => {
-            acc[curr.page] = curr.views;
-            return acc;
-        }, {});
+        const pagesVisited = pageViews.reduce((acc, curr) => (Object.assign(Object.assign({}, acc), { [curr.page]: curr.views })), {});
         return {
             totalActive: activeSessions.size,
-            totalToday: (stats === null || stats === void 0 ? void 0 : stats.totalVisitors) || 0,
+            totalToday: totalVisitorsTodayCount,
             pagesVisited,
         };
     });
@@ -319,38 +171,26 @@ function getAnalyticsSummary() {
 function getActiveSessions() {
     return Array.from(activeSessions.values());
 }
+function getSessionById(sessionId) {
+    return activeSessions.get(sessionId);
+}
 function cleanupInactiveSessions() {
     const INACTIVE_THRESHOLD_MS = 5 * 60 * 1000;
     const now = Date.now();
-    //   activeSessions.forEach((session, sessionId) => {
-    //     if (now - session.lastActivity.getTime() > INACTIVE_THRESHOLD_MS) {
-    //       activeSessions.delete(sessionId);
-    //       prisma.session
-    //         .update({
-    //           where: {
-    //             sessionId: sessionId,
-    //           },
-    //           data: {
-    //             isActive: false,
-    //           },
-    //         })
-    //         .catch((err: unknown) =>
-    //           logger.error(`Failed to mark session ${sessionId} as inactive`, err)
-    //         );
-    //     }
-    //   });
     let cleanedCount = 0;
-    for (const [sessionId, sessionData] of activeSessions.entries()) {
-        if (now - sessionData.lastActivity.getTime() > INACTIVE_THRESHOLD_MS) {
+    activeSessions.forEach((session, sessionId) => {
+        if (now - session.lastActivity.getTime() > INACTIVE_THRESHOLD_MS) {
             activeSessions.delete(sessionId);
-            // Optional update the database to mark session as inactive
-            client_1.default.session.update({
+            client_1.default.session
+                .update({
                 where: { sessionId },
-                data: { isActive: false },
-            }).catch(err => logger_1.default.error(`Failed to mark session ${sessionId} as inactive:`, err));
-            cleanedCount++;
+                data: {
+                    isActive: false,
+                },
+            })
+                .catch(console.error);
         }
-    }
+    });
     if (cleanedCount > 0) {
         logger_1.default.info(`Cleaned up ${cleanedCount} inactive sessions.`);
     }
@@ -361,25 +201,44 @@ function getFilteredEvents(filter) {
         if (filter.page) {
             whereClause.page = {
                 contains: filter.page,
-                mode: 'insensitive'
+                mode: "insensitive",
             };
         }
         if (filter.country) {
-            whereClause.sesssion = {
-                country: { equals: filter.country, mode: 'insensitive' }
+            whereClause.session = {
+                country: {
+                    equals: filter.country,
+                    mode: "insensitive",
+                },
             };
         }
         return client_1.default.event.findMany({
             where: whereClause,
-            orderBy: { timestamp: 'desc' },
-            take: 50,
-            select: {
-                id: true,
-                type: true,
-                page: true,
-                timestamp: true,
-                sessionId: true
+            orderBy: { timestamp: "desc" },
+            take: 100,
+            include: {
+                session: {
+                    select: {
+                        country: true,
+                    },
+                },
             },
+        });
+    });
+}
+function getFilteredEventsForFrontend(filter) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const dbEvents = yield getFilteredEvents(filter);
+        return dbEvents.map((event) => {
+            var _a;
+            return ({
+                id: event.id,
+                sessionId: event.sessionId,
+                page: event.page,
+                country: ((_a = event.session) === null || _a === void 0 ? void 0 : _a.country) || "N/A",
+                timestamp: event.timestamp.toISOString(),
+                type: event.type,
+            });
         });
     });
 }

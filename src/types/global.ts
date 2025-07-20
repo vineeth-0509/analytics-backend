@@ -1,4 +1,5 @@
 export interface VisitorEvent {
+  id: string;
   type: "pageview" | "click" | "session_end";
   page: string;
   sessionId: string;
@@ -11,6 +12,7 @@ export interface VisitorEvent {
 }
 
 export interface ActiveSession {
+  id: string;
   sessionId: string;
   currentPage: string;
   journey: string[];
